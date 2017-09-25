@@ -21,6 +21,9 @@ function help {
 	" -config    : show the settings that are being used "
 	" -jail      : show the currently banned IPs"
 	" -jailbreak : bust out all the currently banned IPs"	
+	" -ban       : ban a provided IP address for 600 seconds, or as specified in -expire"
+	" -unban     : unban a provided IP address"
+	" -parole    : manually check for expired IP blocks"
     " -help      : This message."
 	" "
 }
@@ -67,9 +70,11 @@ $WhiteList = @()
 
 #You can overload the BlockType here for 2003, if you feel like having fun. 
 $OSVersion = invoke-expression "wmic os get Caption /value"
+$BLOCK_TYPE = ""
 if ($OSVersion -match "2008") { $BLOCK_TYPE = "NETSH" }
 if ($OSVersion -match "2012") { $BLOCK_TYPE = "NETSH" }
 if ($OSVersion -match "2016") { $BLOCK_TYPE = "NETSH" }
+if ($OSVersion -match "Windows 10") { $BLOCK_TYPE = "NETSH" }
 
 #Grep configuration file 
 switch -regex -file $ConfigFile {
@@ -389,7 +394,29 @@ if ($args -match "-unban") {
     $IP = $args[ [array]::indexOf($args,"-unban")+1] 	
 	actioned "Unban IP invoked: going to unban $IP and remove from the log."
 	jail_release $IP
-	(gc $BannedIPLog) | ? {$_ -notmatch $IP } | sc $BannedIPLog # remove IP from ban log
+    if (Test-Path $BannedIPLog) { 
+	    (gc $BannedIPLog) | ? {$_ -notmatch $IP } | sc $BannedIPLog # remove IP from ban log
+    }
+	exit
+}
+
+#ban specific IP. 
+if ($args -match "-ban") {     
+    $IP = $args[ [array]::indexOf($args,"-ban")+1] 	
+	actioned "Ban IP invoked: going to ban $IP"
+	
+    if ($args -match "-expire") { 
+		$BanDuration = $args[ [array]::indexOf($args,"-expire")+1] 	
+		$ExpireDate = (Get-Date).AddSeconds($BanDuration)
+	}else{
+        $ExpireDate = (Get-Date).AddSeconds(600)
+    }
+
+		if ((rule_exists $IP) -eq "Yes") { warning ("IP $IP already blocked.")
+		    } else {
+	    firewall_add $IP $ExpireDate
+    }
+
 	exit
 }
 
@@ -397,6 +424,14 @@ if ($args -match "-unban") {
 if ($args -match "-help") { 
 	help;	exit
 }
+
+#Manually clear old entires
+if ($args -match "-parole") { 
+	clear_attempts
+	unban_old_records
+    exit;
+}
+
 
 ################################################################################
 #Setup for the loop
