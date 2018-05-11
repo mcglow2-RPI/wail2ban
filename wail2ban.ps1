@@ -24,6 +24,9 @@ function help {
 	" -ban       : ban a provided IP address for 600 seconds, or as specified in -expire"
 	" -unban     : unban a provided IP address"
 	" -parole    : manually check for expired IP blocks"
+	" -dosDeflate X   : manually check IP volume over given value X. -trial paramater will show what would be banned. "
+	"                   -expire paramater accepts seconds to ban for "
+	" -unregister : remove the Event log listener"
     " -help      : This message."
 	" "
 }
@@ -37,6 +40,7 @@ $DebugPreference = "continue"
 $CHECK_WINDOW = 120  # We check the most recent X seconds of log.         Default: 120
 $CHECK_COUNT  = 5    # Ban after this many failures in search period.     Default: 5
 $MAX_BANDURATION = 7776000 # 3 Months in seconds
+$BLACKLIST_CHECK_INTERVAL = 600 # Default time interval to recheck blacklist url
 	
 ################################################################################
 #  Files
@@ -46,6 +50,8 @@ $wail2banScript  = $wail2banInstall+"wail2ban.ps1"
 $logFile         = $wail2banInstall+"wail2ban_log.log"
 $ConfigFile      = $wail2banInstall+"wail2ban_config.ini"
 $BannedIPLog	 = $wail2banInstall+"bannedIPLog.ini"
+$BlackListFile   = $wail2banInstall+"remoteblacklist.ini"
+$WhiteListFile   = $wail2banInstall+"remotewhitelist.ini"
 
 ################################################################################
 # Constructs
@@ -66,7 +72,13 @@ $null = $CheckEvents.columns.add("EventID")
 $null = $CheckEvents.columns.add("EventDescription")
 	  
 $WhiteList = @()
+$WhitelistUrl = $null
 #$host.UI.RawUI.BufferSize = new-object System.Management.Automation.Host.Size(100,50)
+
+$BlackList = @{}
+$BlackListUrl = $null
+
+$SinkName = "LoginAttempt"
 
 #You can overload the BlockType here for 2003, if you feel like having fun. 
 $OSVersion = invoke-expression "wmic os get Caption /value"
@@ -94,6 +106,13 @@ switch -regex -file $ConfigFile {
 		} else { 
 			switch ($Header) { 
 			"Whitelist" { $WhiteList += $Match1; }		
+            "Config"{
+                    #write-host $Match1 $Match2
+                    switch($Match1){
+                        "BlacklistUrl"{$BlackListUrl=$Match2}
+                        "WhitelistUrl"{$WhitelistUrl=$Match2}
+                    }
+                }		
 			}	
 		}
     }
@@ -142,6 +161,119 @@ function log ($type, $text) {
 	} 
 }
 	 
+function dosDeflateIPs($Max){
+	$result = New-Object System.Collections.ArrayList
+
+	$data = netstat -n
+
+	# Keep only the line with the data (we remove the first lines)
+	$data = $data[4..$data.count]
+
+	foreach ($line in $data){
+		$object = New-Object –TypeName PSObject
+		
+	    # Get rid of the first whitespaces
+	    $line = $line -replace '^\s+', ''
+	    
+
+		if( $line -like '*`]*' ){
+			#IPV6
+			
+			$line = $line -replace '\[' , ''
+			
+			#Split on whitespaces
+		    $line = $line -split '\s+'
+	
+			$object | Add-Member -MemberType NoteProperty  –Name Protocol -Value $line[0]
+			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressIP -Value ($line[1] -split "]:")[0]
+			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressPort -Value  ($line[1] -split "]:")[1]
+			$object | Add-Member -MemberType NoteProperty  –Name ForeignAddressIP -Value ($line[2] -split "]:")[0]
+			$object | Add-Member -MemberType NoteProperty  –Name ForeignAddressPort -Value ($line[2] -split "]:")[1]
+			$object | Add-Member -MemberType NoteProperty  –Name State -Value $line[3]
+		
+			
+			if( $object.LocalAddressIP -ne "::"  ){
+				$key = $result.add($object)
+			}
+		}else{
+			$IPV4
+		    #Split on whitespaces
+		    $line = $line -split '\s+'
+	
+			$object | Add-Member -MemberType NoteProperty  –Name Protocol -Value $line[0]
+			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressIP -Value ($line[1] -split ":")[0]
+			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressPort -Value  ($line[1] -split ":")[1]
+			$object | Add-Member -MemberType NoteProperty  –Name ForeignAddressIP -Value ($line[2] -split ":")[0]
+			$object | Add-Member -MemberType NoteProperty  –Name ForeignAddressPort -Value ($line[2] -split ":")[1]
+			$object | Add-Member -MemberType NoteProperty  –Name State -Value $line[3]
+			
+			if( $object.LocalAddressIP -ne "127.0.0.1" ){
+				$key = $result.add($object)
+			}
+			
+	    }
+	   
+		
+		
+	}
+
+	return $result | Group-Object -Property ForeignAddressIP |
+    Select-Object -Property Count, Name  |
+	Where-Object {$_.Count -gt ($Max-1) } |
+    Sort-Object count -Descending 
+
+}	 
+
+	 
+#Process remote black list
+function remoteBlacklist{
+ 
+    if( $BlackListUrl -eq "" -OR $BlackListUrl -eq $null ){
+        debug "No Blacklist url provided"
+        return 
+    }
+
+    Invoke-WebRequest $BlackListUrl -OutFile $BlackListFile
+ 
+    #regex to make sure we only retrieve the ip's from the file 
+    $regex = "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}" 
+    $blackIPs = get-content -Path $BlackListFile| Select-String $regex 
+
+    foreach ($blackIP in $blackIPs){ 
+       # if ((rule_exists $blackIP) -eq "Yes") { 
+            
+
+		#} else {
+            $ExpireDate = (Get-Date).AddSeconds($BLACKLIST_CHECK_INTERVAL)
+	        firewall_add $blackIP $ExpireDate
+       # }
+    }
+
+    actioned "Updated Remote IP Blacklist"
+}
+
+#Process remote white list
+function remoteWhitelist{
+
+    if( $WhiteListUrl -eq "" -OR $WhiteListUrl -eq $null ){
+        debug "No Blacklist url provided"
+        return 
+    }
+
+    Invoke-WebRequest $WhiteListUrl -OutFile $WhiteListFile
+ 
+    #regex to make sure we only retrieve the ip's from the file 
+    $regex = "\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}" 
+    $whiteIPs = get-content -Path $WhiteListFile | Select-String $regex 
+
+    foreach ($whiteIP in $whiteIPs){ 
+         $WhiteList += $whiteIP | Out-String ; 
+         
+    }
+
+    actioned "Updated Remote IP Whitelist"
+}
+
 #Get the current list of wail2ban bans
 function get_jail_list {
 	$fw = New-Object -ComObject hnetcfg.fwpolicy2 
@@ -367,7 +499,11 @@ if ($args -match "-jailbreak") {
 			$IP = $subject.name.substring($FirewallRulePrefix.length+1)
 			firewall_remove $IP
 		}
-		clear-content $BannedIPLog
+		
+		if( [System.IO.File]::Exists($BannedIPLog) ){
+			clear-content $BannedIPLog
+		}
+		
 	} else { "`nYou can't escape, you know. `n`n(No current firewall listings to remove.)" }
 	exit
 }
@@ -432,11 +568,67 @@ if ($args -match "-parole") {
     exit;
 }
 
+#ban IPs over given connection count
+if ($args -match "-dosDeflate") {     
+    $Max = $args[ [array]::indexOf($args,"-dosDeflate")+1] 	
+	if( $Max -is [int] ){
+		
+	}else{
+		Write-Host "Connection count to ban is required" -ForegroundColor Red
+		exit;
+	}
+	
+	
+	actioned "Ban IPs with more than $Max connections"
+
+ 	if ($args -match "-expire") { 
+		$BanDuration = $args[ [array]::indexOf($args,"-expire")+1] 	
+		$ExpireDate = (Get-Date).AddSeconds($BanDuration)
+	}else{
+        $ExpireDate = (Get-Date).AddSeconds(600)
+    }
+
+	$IPs = dosDeflateIPs $Max
+
+
+
+	if ($args -match "-trial") {  
+		$IPs|Format-Table -AutoSize
+	}else{
+		foreach( $IP in $IPs ){
+			if( $IP -is [psobject] ){
+				if ((rule_exists $IP.Name) -eq "Yes") {
+					warning ("IP $IP already blocked.")
+			    } else {
+				    firewall_add $IP.Name $ExpireDate
+			    }
+			}
+		}
+	}
+	
+
+	exit
+}
+
+
+#Clean up WMI event listener
+if ($args -match "-unregister") { 
+    Unregister-Event -sourceidentifier $SinkName  
+    exit;
+}
 
 ################################################################################
 #Setup for the loop
 
-$SinkName = "LoginAttempt"
+#Process remote lists
+if (!$BlackListUrl -ne $null ) {
+    remoteBlacklist
+}
+
+if (!$WhiteListUrl -ne $null) {
+    remoteWhitelist
+}
+
 $Entry = @{}
 $eventlist ="("
 foreach($a in $CheckEvents) { 
