@@ -71,7 +71,8 @@ $null = $CheckEvents.columns.add("EventLog")
 $null = $CheckEvents.columns.add("EventID")
 $null = $CheckEvents.columns.add("EventDescription")
 	  
-$WhiteList = @()
+$WhiteList4 = @()
+$WhiteList6 = @()
 $WhitelistUrl = $null
 #$host.UI.RawUI.BufferSize = new-object System.Management.Automation.Host.Size(100,50)
 
@@ -105,7 +106,13 @@ switch -regex -file $ConfigFile {
 			$CheckEvents.Rows.Add($row)
 		} else { 
 			switch ($Header) { 
-			"Whitelist" { $WhiteList += $Match1; }		
+			"Whitelist" {
+				if( $Match1 -like '*:*' ){
+					$WhiteList6 += $Match1 ; 
+				}else{
+		         	$WhiteList4 += $Match1 ; 
+		        }
+			}		
             "Config"{
                     #write-host $Match1 $Match2
                     switch($Match1){
@@ -185,6 +192,7 @@ function dosDeflateIPs($Max){
 		    $line = $line -split '\s+'
 	
 			$object | Add-Member -MemberType NoteProperty  –Name Protocol -Value $line[0]
+			$object | Add-Member -MemberType NoteProperty  –Name IPv -Value "6"
 			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressIP -Value ($line[1] -split "]:")[0]
 			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressPort -Value  ($line[1] -split "]:")[1]
 			$object | Add-Member -MemberType NoteProperty  –Name ForeignAddressIP -Value ($line[2] -split "]:")[0]
@@ -201,6 +209,7 @@ function dosDeflateIPs($Max){
 		    $line = $line -split '\s+'
 	
 			$object | Add-Member -MemberType NoteProperty  –Name Protocol -Value $line[0]
+			$object | Add-Member -MemberType NoteProperty  –Name IPv -Value "4"
 			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressIP -Value ($line[1] -split ":")[0]
 			$object | Add-Member -MemberType NoteProperty  –Name LocalAddressPort -Value  ($line[1] -split ":")[1]
 			$object | Add-Member -MemberType NoteProperty  –Name ForeignAddressIP -Value ($line[2] -split ":")[0]
@@ -256,7 +265,7 @@ function remoteBlacklist{
 function remoteWhitelist{
 
     if( $WhiteListUrl -eq "" -OR $WhiteListUrl -eq $null ){
-        debug "No Blacklist url provided"
+        debug "No Whitelist url provided"
         return 
     }
 
@@ -267,8 +276,11 @@ function remoteWhitelist{
     $whiteIPs = get-content -Path $WhiteListFile | Select-String $regex 
 
     foreach ($whiteIP in $whiteIPs){ 
-         $WhiteList += $whiteIP | Out-String ; 
-         
+		if( $whiteIP -like '*:*' ){
+			$WhiteList6 += $whiteIP | Out-String ; 
+		}else{
+         	$WhiteList4 += $whiteIP | Out-String ; 
+        }
     }
 
     actioned "Updated Remote IP Whitelist"
@@ -310,7 +322,20 @@ function netmask($MaskLength) {
   
 #check if IP is whitelisted
 function whitelisted($IP) { 
-	foreach ($white in $Whitelist) {
+	$Whitelisted = $False
+	
+	if( $IP -like '*:*' ){
+		$Whitelisted = whitelistedV6($IP)
+	}else{
+		$Whitelisted = whitelistedV4($IP)
+	}
+	
+	return $Whitelisted
+}
+
+#check if IP is whitelisted
+function whitelistedV4($IP) { 
+	foreach ($white in $Whitelist4) {
 		if ($IP -eq $white) { $Whitelisted = "Uniquely listed."; break} 
 		if ($white.contains("/")) { 
 			$Mask =  netmask($white.Split("/")[1])
@@ -322,7 +347,36 @@ function whitelisted($IP) {
 		}
 	}
 	return $Whitelisted
-} 
+}
+
+#check if IP is whitelisted
+function whitelistedV6($IP) { 
+	
+	Write-Host "V6 bl check" $IP
+	
+	foreach ($white in $Whitelist6) {
+		if ($IP -eq $white) { $Whitelisted = "Uniquely listed."; break} 
+		if ($white.contains("/")) { 
+			$Mask =  $white.Split("/")[1]
+			
+			if( $Mask -ne 48 ){
+				warning "IPv6 whitelists only work for /48 networks"
+			}
+			
+			$network = ($white.Split("/")[0])
+			
+			$a = $network.substring(0,12)
+			$b = $IP.substring(0,12)
+			
+			if ( $a -eq $b  ) { 
+				$Whitelisted = "Contained in subnet $white"; break;
+			}
+			
+		}
+	}
+	
+	return $Whitelisted
+}
 
 #Read in the saved file of settings. Only called on script start, such as after reboot
 function pickupBanDuration { 
@@ -479,7 +533,10 @@ if ($args -match "-config") {
 	write-host "`nIt's currently checking:"
 	foreach ($event in $CheckEvents ) {  "- "+$Event.EventLog+" event log for event ID "+$Event.EventDescription+" (Event "+$Event.EventID+")"}	
 	write-host "`nAnd we're whitelisting: "
-	foreach ($white in $whitelist) { 
+	foreach ($white in $whitelist4) { 
+		write-host "- $($white)" -foregroundcolor "cyan" -nonewline
+	} 
+	foreach ($white in $whitelist6) { 
 		write-host "- $($white)" -foregroundcolor "cyan" -nonewline
 	} 
 	write-host "in addition to any IPs present on the network interfaces on the machine"
@@ -590,19 +647,32 @@ if ($args -match "-dosDeflate") {
 
 	$IPs = dosDeflateIPs $Max
 
+	#check against whitelist
+	$cleanIPS = New-Object System.Collections.ArrayList
 
+	foreach( $IP in $IPs ){
+		if( $IP -is [psobject] ){
+			$w = whitelisted($IP.Name )
+			if ($w) { 
+				$msg = $IP.Name + " is whitelisted, except from banning. Why? $w "
+				warning $msg 
+			} else {
+				$i = $cleanIPS.add($IP)
+			}
+		}
+	}
 
 	if ($args -match "-trial") {  
-		$IPs|Format-Table -AutoSize
+		$cleanIPs|Format-Table -AutoSize
 	}else{
-		foreach( $IP in $IPs ){
-			if( $IP -is [psobject] ){
+		foreach( $IP in $cleanIPs ){
+			
 				if ((rule_exists $IP.Name) -eq "Yes") {
-					warning ("IP $IP already blocked.")
+					warning ("IP " + $IP.Name + "already blocked.")
 			    } else {
 				    firewall_add $IP.Name $ExpireDate
 			    }
-			}
+			
 		}
 	}
 	
