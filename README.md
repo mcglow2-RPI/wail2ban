@@ -5,7 +5,7 @@ wail2ban
 
 ![Saddest Whale](http://i.imgur.com/NVlsY.png "Saddest Whale")
 
-wail2ban is a windows port of the basic functionality of [fail2ban](http://www.fail2ban.org/), and combining elements of [ts_block](https://github.com/EvanAnderson/ts_block). 
+wail2ban is a windows port of the basic functionality of [fail2ban](http://www.fail2ban.org/), and combining elements of [ts_block](https://github.com/EvanAnderson/ts_block).  This fork also includes elements inspired by [dosDeflate](https://github.com/jgmdev/ddos-deflate). 
 
 
 overview
@@ -33,6 +33,10 @@ There are also a number of options that can be run against the script to control
  * `-config` : dumps a parsed output of the configuration file to standard out, including timing and whitelist configurations. 
  * `-jail`   : shows the current set of banned IPs on the machine
  * `-jailbreak`: unbans every IP currently banned by the script. 
+ * `-ban`: ban a provided IP address for 600 seconds, or as specified in -expire
+ * `-unban`:  unban a provided IP address
+ * `-parole`: manually check for expired IP blocks
+ * `-dosDeflate X`: anually check IP volume over given value X. -trial paramater will show what would be banned. -expire paramater accepts seconds to ban for
 
 technical overview 
 ------------------
@@ -52,6 +56,19 @@ Database products also include these kind of events, such as:
 These events are produced any time someone mistypes a password, or similar. 
 
 The issue occurs when automated brute-force entry systems attempt to access systems multiple times a second. 
+
+dosDeflate manual mode
+------------------
+
+Wail2Ban can be run manually with the -dosDeflate paramater to block any IP address with over X number of active connections to the server.  
+
+The -trial paramater allows you to preview what would have been blocked
+
+Default block time period is 10 minutes, however -expire SECONDS can be passed to change the time period
+
+`.\Wail2ban.ps1 -dosDeflate 20 -expire 86400 ` would block any IP with 20 open connections for 1 day.
+
+If you are not running Wail2Ban as a scheduled task.  You can periodically run `.\Wail2ban.ps1 -parole` to manually cleanup the expired blocks. 
 
 what wail2ban does
 ------------------
@@ -83,20 +100,6 @@ As with all automated systems, there can be some false-positives.
 
 **Jailbreak** - a configuration called `-jailbreak` can be run against the script at any time to immediately remove all banned IPs. All their counters are reset, and it is as if the IP never tried to attack the machine.
 
-htmlgen
----------
 
-I've added a script that will grep the wail2ban log file, and generate some nice statistics, and show the top banned IPs by country. 
-[Sample Report](http://i.imgur.com/ufb9mvX.png)
-
-If you want to enable this, grok the main wail2ban.ps1 script for the call to `wail2ban_htmlgen.ps1`, and enable it (remove the comment)
-
-
-ongoing work 
-------------
-
-This script has room for improvement. Presently, it only handles Windows 2008-style firewall usage. This can be expanded by changing the code near the `BLOCK_TYPE` variable, to overload it. 
-
-There can also be work relating to the service-like execution of this script, so it's always running. This can be acheieved using something like [non-sucking service manager](http://nssm.cc/), but that is left as an exercise for the reader. 
 
 
