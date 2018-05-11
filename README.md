@@ -36,7 +36,7 @@ There are also a number of options that can be run against the script to control
  * `-ban`: ban a provided IP address for 600 seconds, or as specified in -expire
  * `-unban`:  unban a provided IP address
  * `-parole`: manually check for expired IP blocks
- * `-dosDeflate X`: anually check IP volume over given value X. -trial paramater will show what would be banned. -expire paramater accepts seconds to ban for
+ * `-dosDeflate X`: manually check IP volume over given value X. -trial paramater will show what would be banned. -expire paramater accepts seconds to ban for
 
 technical overview 
 ------------------
